@@ -85,6 +85,7 @@
     "adm-zip": "^0.5.16",
     "api-dylux": "latest",
     "api-qasim": "^3.2.10",
+    "awesome-phonenumber": "*",
 
     "axios": "^1.8.4",
     "better-sqlite3": "^12.5.0",
