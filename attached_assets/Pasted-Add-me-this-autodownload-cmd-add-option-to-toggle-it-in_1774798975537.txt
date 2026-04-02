@@ -1,0 +1,2000 @@
+Add me this autodownload cmd  add option to toggle it in private chats,groups etc and off
+
+
+const { cmd } = require("../command");
+const config = require('../config');
+const axios = require('axios');
+const { File } = require('megajs');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+// Platform URLs and their APIs
+const platforms = {
+    youtube: {
+        pattern: /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w\-_]{11})/i,
+        api: "https://jawad-tech.vercel.app/download/ytdl",
+        method: "video"
+    },
+    facebook: {
+        pattern: /(?:https?:\/\/)?(?:www\.)?(facebook\.com|fb\.watch)\/[^\s]+/i,
+        api: "https://jawad-tech.vercel.app/downloader",
+        method: "video"
+    },
+    instagram: {
+        pattern: /(?:https?:\/\/)?(?:www\.)?(instagram\.com|instagr\.am)\/[^\s]+/i,
+        api: "https://jawad-tech.vercel.app/igdl",
+        method: "media"
+    },
+    tiktok: {
+        pattern: /(?:https?:\/\/)?(?:www\.)?(?:tiktok\.com|vt\.tiktok\.com)\/[^\s]+/i,
+        api: "https://delirius-apiofc.vercel.app/download/tiktok",
+        method: "video"
+    },
+    pinterest: {
+        pattern: /(?:https?:\/\/)?(?:www\.)?(pinterest\.com|pin\.it)\/[^\s]+/i,
+        api: "https://jawad-tech.vercel.app/download/pinterest",
+        method: "media"
+    },
+    mediafire: {
+        pattern: /https?:\/\/(?:www\.)?mediafire\.com\/(file|folder)\/[^\s]+/i,
+        api: "https://api.deline.web.id/downloader/mediafire",
+        method: "document"
+    },
+    catbox: {
+        pattern: /https?:\/\/files\.catbox\.moe\/[^\s]+/i,
+        method: "direct"
+    },
+    mega: {
+        pattern: /https?:\/\/mega\.nz\/(file|folder)\/[^\s]+/i,
+        method: "mega"
+    }
+};
+
+const createCaption = () =>
+`*${config.BOT_NAME} Auto Downloader*`;
+
+// No prefix auto-downloader handler - Always enabled
+cmd({
+    'on': "body"
+}, async (client, message, store, {
+    from,
+    body,
+    isGroup,
+    isAdmins,
+    isBotAdmins,
+    isCreator,
+    reply,
+    sender
+}) => {
+    try {
+        // Check if message contains any platform URL
+        let matchedPlatform = null;
+        let matchedUrl = null;
+        for (const [platform, data] of Object.entries(platforms)) {
+            const match = body.match(data.pattern);
+            if (match) {
+                matchedPlatform = platform;
+                matchedUrl = match[0];
+                break;
+            }
+        }
+        // Skip if no platform matched
+        if (!matchedPlatform || !matchedUrl) return;
+
+        // Get platform config
+        const platform = platforms[matchedPlatform];
+        const caption = createCaption();
+        // Show processing reaction
+        await client.sendMessage(from, { react: { text: '⏳', key: message.key } });
+
+        try {
+            // Handle different platform types
+            if (platform.method === "mega") {
+                await handleMegaDownload(client, from, matchedUrl, caption, message);
+            } else if (platform.method === "direct") {
+                await handleDirectDownload(client, from, matchedUrl, matchedPlatform, caption, message);
+            } else {
+                await handleApiDownload(client, from, matchedUrl, matchedPlatform, caption, message);
+            }
+            await client.sendMessage(from, { react: { text: '✅', key: message.key } });
+        } catch (apiError) {
+            console.error(`Auto-downloader error for ${matchedPlatform}:`, apiError);
+            await client.sendMessage(from, { react: { text: '❌', key: message.key } });
+        }
+
+    } catch (error) {
+        console.error("Auto-downloader error:", error);
+    }
+});
+
+// Handle MEGA.nz downloads
+async function handleMegaDownload(client, from, url, caption, message) {
+    try {
+        const file = File.fromURL(url);
+        const data = await new Promise((resolve, reject) => {
+            file.download((err, data) => {
+                if (err) reject(err);
+                else resolve(data);
+            });
+        });
+        const savePath = path.join(os.tmpdir(), file.name || "mega_download.bin");
+        fs.writeFileSync(savePath, data);
+        const ext = path.extname(file.name || '').toLowerCase();
+        const fileName = file.name || "Downloaded_File";
+
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext)) {
+            await client.sendMessage(from, {
+                image: fs.readFileSync(savePath),
+                caption: caption
+            }, { quoted: message });
+        } else if (['.mp4', '.avi', '.mov', '.mkv', '.webm'].includes(ext)) {
+            await client.sendMessage(from, {
+                video: fs.readFileSync(savePath),
+                caption: caption
+            }, { quoted: message });
+        } else if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) {
+            await client.sendMessage(from, {
+                audio: fs.readFileSync(savePath),
+                mimetype: "audio/mpeg",
+                ptt: false
+            }, { quoted: message });
+        } else {
+            await client.sendMessage(from, {
+                document: fs.readFileSync(savePath),
+                fileName: fileName,
+                mimetype: "application/octet-stream",
+                caption: caption
+            }, { quoted: message });
+        }
+        fs.unlinkSync(savePath);
+    } catch (error) {
+        console.error("MEGA download error:", error);
+        throw error;
+    }
+}
+
+// Handle direct file URLs (only for catbox now)
+async function handleDirectDownload(client, from, url, platformType, caption, message) {
+    try {
+        // Only handling catbox now
+        if (platformType === "catbox") {
+            const fileName = url.split('/').pop().split('?')[0] || "Downloaded_File";
+            await client.sendMessage(from, {
+                document: { url: url },
+                fileName: fileName,
+                mimetype: "application/octet-stream",
+                caption: caption
+            }, { quoted: message });
+        }
+    } catch (error) {
+        console.error("Direct download error:", error);
+        throw error;
+    }
+}
+
+// Handle API-based downloads
+async function handleApiDownload(client, from, url, platformType, caption, message) {
+    try {
+        const platform = platforms[platformType];
+        const apiUrl = `${platform.api}?url=${encodeURIComponent(url)}`;
+        const response = await axios.get(apiUrl);
+
+        // Handle TikTok with the new API response structure
+        if (platformType === "tiktok") {
+            if (!response.data?.status || !response.data?.data) {
+                throw new Error("TikTok API returned error");
+            }
+            const data = response.data.data;
+            
+            // Get the first video URL from meta.media array
+            if (data.meta?.media?.length > 0) {
+                // Try to get HD video first, then WM, then original
+                const mediaItem = data.meta.media[0];
+                let videoUrl = mediaItem.hd || mediaItem.wm || mediaItem.org;
+                
+                if (!videoUrl) {
+                    throw new Error("No video URL found in media array");
+                }
+                
+                // Ensure we have a valid URL (add https if missing)
+                if (videoUrl.startsWith('//')) {
+                    videoUrl = 'https:' + videoUrl;
+                } else if (!videoUrl.startsWith('http')) {
+                    videoUrl = 'https://' + videoUrl;
+                }
+                
+                console.log(`Downloading TikTok video from: ${videoUrl}`);
+                
+                await client.sendMessage(from, {
+                    video: { url: videoUrl },
+                    caption: caption
+                }, { quoted: message });
+            } else {
+                throw new Error("No media found in TikTok response");
+            }
+            return;
+        }
+
+        // Handle MediaFire (sends as document)
+        if (platformType === "mediafire") {
+            if (!response.data || !response.data.status || !response.data.result || !response.data.result.downloadUrl || !response.data.result.fileName) {
+                throw new Error("Failed to fetch MediaFire file info");
+            }
+            const fileInfo = response.data.result;
+            const fileName = fileInfo.fileName;
+            const fileResponse = await axios.get(fileInfo.downloadUrl, { responseType: 'arraybuffer' });
+            const fileBuffer = Buffer.from(fileResponse.data);
+            await client.sendMessage(from, {
+                document: fileBuffer,
+                fileName: fileName,
+                mimetype: "application/octet-stream",
+                caption: caption
+            }, { quoted: message });
+            return;
+        }
+
+        // Handle Instagram with the new API
+        if (platformType === "instagram") {
+            // Using the new API: https://jawad-tech.vercel.app/igdl
+            if (!response.data?.status || !response.data.result?.length) {
+                throw new Error("Failed to fetch Instagram media");
+            }
+            
+            const mediaData = response.data.result;
+
+            // Send all media items
+            for (const item of mediaData) {
+                const isVideo = item.contentType?.includes('video') || item.format === 'mp4';
+                
+                if (isVideo) {
+                    await client.sendMessage(from, {
+                        video: { url: item.url },
+                        caption: caption
+                    }, { quoted: message });
+                } else {
+                    await client.sendMessage(from, {
+                        image: { url: item.url },
+                        caption: caption
+                    }, { quoted: message });
+                }
+                
+                // Small delay between sends to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            return;
+        }
+
+        // Handle other APIs (YouTube, Facebook, Pinterest)
+        if (!response.data?.status) {
+            throw new Error("API returned error");
+        }
+        const data = response.data;
+
+        switch (platformType) {
+            case "youtube":
+                if (data.result?.mp4) {
+                    await client.sendMessage(from, {
+                        video: { url: data.result.mp4 },
+                        caption: caption
+                    }, { quoted: message });
+                }
+                break;
+            case "facebook":
+                if (data.result?.length > 0) {
+                    const video = data.result.find(v => v.quality === "HD") || data.result.find(v => v.quality === "SD");
+                    if (video?.url) {
+                        await client.sendMessage(from, {
+                            video: { url: video.url },
+                            caption: caption
+                        }, { quoted: message });
+                    }
+                }
+                break;
+            case "pinterest":
+                if (data.result?.url) {
+                    const isVideo = data.result.type === 'video';
+                    if (isVideo) {
+                        await client.sendMessage(from, {
+                            video: { url: data.result.url },
+                            caption: caption
+                        }, { quoted: message });
+                    } else {
+                        await client.sendMessage(from, {
+                            image: { url: data.result.url },
+                            caption: caption
+                        }, { quoted: message });
+                    }
+                }
+                break;
+        }
+    } catch (error) {
+        console.error(`API download error for ${platformType}:`, error);
+        throw error;
+    }
+}
+
+
+The  fix my antideit so it shows before and after message
+
+// ─── ANTIEDIT CODE ──────────────────────────────────────────────────
+
+const _antieditCache = new Map();
+const ANTIEDIT_CACHE_TTL = 30 * 60 * 1000; // keep originals for 30 mins
+
+function cacheOriginalMessage(chatId, messageId, content, sender) {
+    if (!content || !content.trim()) return;
+    const key = `${chatId}:${messageId}`;
+    _antieditCache.set(key, { content: content.trim(), sender, cachedAt: Date.now() });
+    
+    // Auto-clean old entries
+    setTimeout(() => _antieditCache.delete(key), ANTIEDIT_CACHE_TTL);
+}
+
+function getCachedOriginal(chatId, messageId) {
+    return _antieditCache.get(`${chatId}:${messageId}`) || null;
+}
+
+function extractMessageText(msg) {
+    if (!msg) return '';
+    return (
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        msg.imageMessage?.caption ||
+        msg.videoMessage?.caption ||
+        msg.documentMessage?.caption ||
+        ''
+    );
+}
+
+// ─── MAIN BOT FUNCTION ────────────────────────────────────────────────────────
+async function startKeithTech() {
+    try {
+        console.log(chalk.green('Connecting to MOON-X...'));
+        console.log('');
+
+        await downloadSessionData();
+
+        let { version, isLatest } = await fetchLatestBaileysVersion()
+        const { state, saveCreds } = await useMultiFileAuthState(`./session`)
+        const msgRetryCounterCache = new NodeCache()
+
+        const KeithTech = makeWASocket({
+            version,
+            logger: pino({ level: 'silent' }),
+            printQRInTerminal: !pairingCode,
+            browser: ["Ubuntu", "Chrome", "20.0.04"],
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+            },
+            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
+            syncFullHistory: false,
+            retryRequestDelayMs: 10000,
+            transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
+            maxMsgRetryCount: 15,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 30000,
+            emitOwnEvents: true,
+            fireInitQueries: true,
+            getMessage: async (key) => {
+                let jid = jidNormalizedUser(key.remoteJid)
+                let msg = await store.loadMessage(jid, key.id)
+                return msg?.message || ""
+            },
+            msgRetryCounterCache,
+            defaultQueryTimeoutMs: 60000,
+        })
+
+        KeithTech.ev.on('creds.update', saveCreds)
+        store.bind(KeithTech.ev)
+
+        // ── ANTIEDIT: ──────────────────────
+        
+        KeithTech.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            for (const msg of messages) {
+                try {
+                    if (!msg.message || msg.key.remoteJid === 'status@broadcast') continue;
+                    if (msg.key.id?.startsWith('BAE5') && msg.key.id.length === 16) continue;
+
+                    const chatId  = msg.key.remoteJid;
+                    const msgId   = msg.key.id;
+                    const sender  = msg.key.participant || msg.key.remoteJid;
+
+                    // Unwrap ephemeral
+                    const innerMsg = msg.message?.ephemeralMessage?.message || msg.message;
+                    const text = extractMessageText(innerMsg);
+
+                    
+                    if (text) cacheOriginalMessage(chatId, msgId, text, sender);
+                } catch (_) {}
+            }
+        });
+
+        // ── ANTIEDIT: ────────────────────────
+        KeithTech.ev.on('messages.update', async (updates) => {
+            try {
+                
+                delete require.cache[require.resolve('./settings')];
+                const _s = require('./settings');
+                const antieditOn = String(_s.antieditEnabled ?? 'true').toLowerCase();
+                if (antieditOn === 'false' || antieditOn === 'off') return;
+
+                // check lib if available
+                try {
+                    const { isAntieditEnabled } = require('./lib/antiedit');
+                    if (!isAntieditEnabled()) return;
+                } catch (_) {}
+
+                for (const update of updates) {
+                    try {
+                        if (!update.update?.message) continue;
+
+                        const chatId   = update.key.remoteJid;
+                        const msgId    = update.key.id;
+                        const sender   = update.key.participant || update.key.remoteJid;
+                        if (!chatId || !msgId) continue;
+
+                        // ── Extract edited text
+                        let editedContent = '';
+                        const u = update.update.message;
+
+                        // Format 1: protocolMessage wrapping 
+                        editedContent ||= u?.protocolMessage?.editedMessage?.conversation;
+                        editedContent ||= u?.protocolMessage?.editedMessage?.extendedTextMessage?.text;
+                        // Format 2: direct editedMessage (DMs / newer WA versions)
+                        editedContent ||= u?.editedMessage?.message?.conversation;
+                        editedContent ||= u?.editedMessage?.message?.extendedTextMessage?.text;
+                        // Format 3: flat conversation update
+                        editedContent ||= (u?.conversation && u?.conversation !== '') ? u.conversation : '';
+
+                        if (!editedContent || !editedContent.trim()) continue;
+                        editedContent = editedContent.trim();
+
+                        // ── Look up original from our cache ──────────────────────
+                        const original = getCachedOriginal(chatId, msgId);
+
+                        // Also try lib cache as fallback
+                        let originalContent = original?.content || null;
+                        if (!originalContent) {
+                            try {
+                                const { getOriginalMessage } = require('./lib/antiedit');
+                                const libOrig = getOriginalMessage(chatId, msgId);
+                                originalContent = libOrig?.content || null;
+                            } catch (_) {}
+                        }
+
+                        // Skip if same text (WA sometimes fires update without real change)
+                        if (!originalContent || editedContent === originalContent) continue;
+
+                        // ── Build and send alert ──────────────────────────────────
+                        const isGroup = chatId.endsWith('@g.us');
+                        const senderNum = sender.split('@')[0];
+
+                        const mode = (() => {
+                            try { return require('./lib/antiedit').getAntieditMode(); } catch (_) { return _s.antieditMode || 'public'; }
+                        })();
+
+                        const alertText =
+`⚠️ *ANTI-EDIT ALERT!*
+
+👤 *Sender:* @${senderNum}${isGroup ? `\n🏠 *Group:* ${chatId.split('@')[0]}` : ''}
+
+📝 *Original Message:*
+${originalContent}
+
+✏️ *Edited To:*
+${editedContent}
+
+⏰ *Time:* ${new Date().toLocaleString()}
+
+> ᴘᴏᴡᴇʀᴇᴅ ʙʏ Mᴏᴏɴ X`;
+
+                        if (mode === 'private') {
+                            const ownerJid = (settings.ownerNumber || '').replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                            if (ownerJid !== '@s.whatsapp.net') {
+                                await KeithTech.sendMessage(ownerJid, { text: alertText, mentions: [sender] }).catch(() => {});
+                            }
+                        } else {
+                            await KeithTech.sendMessage(chatId, { text: alertText, mentions: [sender] }).catch(() => {});
+                        }
+
+                        // Update cache with edited text as new "original" for next edit
+                        cacheOriginalMessage(chatId, msgId, editedContent, sender);
+
+                    } catch (innerErr) {
+                        console.error(`${chalk.hex('#218895')('[ MOON-X ]')} ${chalk.red('Antiedit inner error:')} ${innerErr.message}`);
+                    }
+                }
+            } catch (e) {
+                console.error(`${chalk.hex('#218895')('[ MOON-X ]')} ${chalk.red('Antiedit messages.update error:')} ${e.message}`);
+            }
+        });
+
+
+Add buttons and non button mode button mode should show buttons on all download cmds and settings toggle cmds using gifted btns
+
+
+const {
+        gmd,
+        gitRepoRegex,
+        MAX_MEDIA_SIZE,
+        getFileSize,
+        getMimeCategory,
+        getMimeFromUrl,
+    } = require("../gift"),
+    GIFTED_DLS = require("gifted-dls"),
+    giftedDls = new GIFTED_DLS(),
+    axios = require("axios"),
+    { sendButtons } = require("gifted-btns");
+
+function extractButtonId(msg) {
+    if (!msg) return null;
+    if (msg.templateButtonReplyMessage?.selectedId)
+        return msg.templateButtonReplyMessage.selectedId;
+    if (msg.buttonsResponseMessage?.selectedButtonId)
+        return msg.buttonsResponseMessage.selectedButtonId;
+    if (msg.listResponseMessage?.singleSelectReply?.selectedRowId)
+        return msg.listResponseMessage.singleSelectReply.selectedRowId;
+    if (msg.interactiveResponseMessage) {
+        const nf = msg.interactiveResponseMessage.nativeFlowResponseMessage;
+        if (nf?.paramsJson) {
+            try { const p = JSON.parse(nf.paramsJson); if (p.id) return p.id; } catch {}
+        }
+        return msg.interactiveResponseMessage.buttonId || null;
+    }
+    return null;
+}
+
+gmd(
+    {
+        pattern: "gitclone",
+        category: "downloader",
+        react: "📦",
+        aliases: ["gitdl", "github", "git", "repodl", "clone"],
+        description: "Download GitHub repository as zip file",
+    },
+    async (from, Gifted, conText) => {
+        const { q, mek, reply, react, sender, botName, newsletterJid } =
+            conText;
+
+        if (!q) {
+            await react("❌");
+            return reply(
+                `Please provide a GitHub repository link.\n\n*Usage:* .gitclone https://github.com/user/repo`,
+            );
+        }
+
+        if (!gitRepoRegex.test(q)) {
+            await react("❌");
+            return reply(
+                "Invalid GitHub link format. Please provide a valid GitHub repository URL.",
+            );
+        }
+
+        try {
+            let [, user, repo] = q.match(gitRepoRegex) || [];
+            repo = repo.replace(/\.git$/, "").split("/")[0];
+
+            const apiUrl = `https://api.github.com/repos/${user}/${repo}`;
+            const zipUrl = `https://api.github.com/repos/${user}/${repo}/zipball`;
+
+            await reply(`Fetching repository *${user}/${repo}*...`);
+
+            const repoResponse = await axios.get(apiUrl);
+            if (!repoResponse.data) {
+                await react("❌");
+                return reply(
+                    "Repository not found or access denied. Make sure the repository is public.",
+                );
+            }
+
+            const repoData = repoResponse.data;
+            const defaultBranch = repoData.default_branch || "main";
+            const filename = `${user}-${repo}-${defaultBranch}.zip`;
+
+            await Gifted.sendMessage(
+                from,
+                {
+                    document: { url: zipUrl },
+                    fileName: filename,
+                    mimetype: "application/zip",
+                    contextInfo: {
+                        forwardingScore: 1,
+                        isForwarded: true,
+                        forwardedNewsletterMessageInfo: {
+                            newsletterJid: newsletterJid,
+                            newsletterName: botName,
+                            serverMessageId: 143,
+                        },
+                    },
+                },
+                { quoted: mek },
+            );
+
+            await react("✅");
+        } catch (error) {
+            console.error("GitClone error:", error);
+            await react("❌");
+
+            if (error.message?.includes("404")) {
+                return reply("Repository not found.");
+            } else if (error.message?.includes("rate limit")) {
+                return reply(
+                    "GitHub API rate limit exceeded. Please try again later.",
+                );
+            } else {
+                return reply(`Failed to download repository: ${error.message}`);
+            }
+        }
+    },
+);
+
+gmd(
+    {
+        pattern: "fb",
+        category: "downloader",
+        react: "📘",
+        aliases: ["fbdl", "facebookdl", "facebook"],
+        description: "Download Facebook videos",
+    },
+    async (from, Gifted, conText) => {
+        const {
+            q,
+            mek,
+            reply,
+            react,
+            botName,
+            botFooter,
+            newsletterJid,
+            gmdBuffer,
+            toAudio,
+            formatAudio,
+            GiftedTechApi,
+            GiftedApiKey,
+        } = conText;
+
+        if (!q) {
+            await react("❌");
+            return reply("Please provide a Facebook video URL");
+        }
+
+        if (!q.includes("facebook.com") && !q.includes("fb.watch")) {
+            await react("❌");
+            return reply("Please provide a valid Facebook URL");
+        }
+
+        try {
+            const apiUrl = `${GiftedTechApi}/api/download/facebook?apikey=${GiftedApiKey}&url=${encodeURIComponent(q)}`;
+            const response = await axios.get(apiUrl, { timeout: 60000 });
+
+            if (!response.data?.success || !response.data?.result) {
+                await react("❌");
+                return reply(
+                    "Failed to fetch video. Please check the URL and try again.",
+                );
+            }
+
+            const { title, duration, thumbnail, hd_video, sd_video } =
+                response.data.result;
+            const dateNow = Date.now();
+            const videoUrl = hd_video || sd_video;
+
+            const buttons = [];
+            if (hd_video)
+                buttons.push({ id: `fb_hd_${dateNow}`, text: "HD Quality" });
+            if (sd_video)
+                buttons.push({ id: `fb_sd_${dateNow}`, text: "SD Quality" });
+            buttons.push({ id: `fb_audio_${dateNow}`, text: "Audio Only" });
+
+            await sendButtons(Gifted, from, {
+                title: `${botName} FACEBOOK DOWNLOADER`,
+                text: `*Title:* ${title || "Facebook Video"}\n*Duration:* ${duration || "Unknown"}\n\n*Select download type:*`,
+                footer: botFooter,
+                image: { url: thumbnail },
+                buttons: buttons,
+            });
+
+            const handleResponse = async (event) => {
+                const messageData = event.messages[0];
+                if (!messageData.message) return;
+
+                const selectedButtonId = extractButtonId(messageData.message);
+                if (!selectedButtonId) return;
+                if (!selectedButtonId.includes(`_${dateNow}`)) return;
+
+                const isFromSameChat = messageData.key?.remoteJid === from;
+                if (!isFromSameChat) return;
+
+                await react("⬇️");
+
+                try {
+                    if (selectedButtonId.startsWith("fb_audio")) {
+                        const sourceVideo = hd_video || sd_video;
+                        if (!sourceVideo) {
+                            await react("❌");
+                            return reply(
+                                "No video available for audio extraction.",
+                                messageData,
+                            );
+                        }
+
+                        const videoBuffer = await gmdBuffer(sourceVideo);
+                        if (!videoBuffer || videoBuffer instanceof Error || !Buffer.isBuffer(videoBuffer)) {
+                            await react("❌");
+                            return reply(
+                                "Failed to download video for audio extraction. Please try again.",
+                                messageData,
+                            );
+                        }
+                        let audioBuffer;
+                        try {
+                            audioBuffer = await toAudio(videoBuffer);
+                        } catch (audioErr) {
+                            await react("❌");
+                            const errMsg = audioErr.message || String(audioErr);
+                            if (errMsg.includes('no audio')) {
+                                return reply("This video has no audio track to extract.", messageData);
+                            }
+                            return reply("Failed to convert video to audio: " + errMsg, messageData);
+                        }
+                        if (!audioBuffer || !Buffer.isBuffer(audioBuffer)) {
+                            await react("❌");
+                            return reply(
+                                "Failed to convert video to audio. The video format may not be supported.",
+                                messageData,
+                            );
+                        }
+                        const fileSize = audioBuffer.length;
+
+                        if (fileSize > MAX_MEDIA_SIZE) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: audioBuffer,
+                                    fileName: `${(title || "facebook_audio").replace(/[^\w\s.-]/gi, "")}.mp3`,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    audio: audioBuffer,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    } else {
+                        const selectedVideoUrl = selectedButtonId.startsWith(
+                            "fb_hd",
+                        )
+                            ? hd_video
+                            : sd_video;
+
+                        if (!selectedVideoUrl) {
+                            await react("❌");
+                            return reply(
+                                "Selected quality not available.",
+                                messageData,
+                            );
+                        }
+
+                        const fileSize = await getFileSize(selectedVideoUrl);
+                        const sendAsDoc = fileSize > MAX_MEDIA_SIZE;
+
+                        if (sendAsDoc) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: { url: selectedVideoUrl },
+                                    fileName: `${(title || "facebook_video").replace(/[^\w\s.-]/gi, "")}.mp4`,
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "Facebook Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    video: { url: selectedVideoUrl },
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "Facebook Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    }
+
+                    await react("✅");
+                } catch (error) {
+                    console.error("Facebook download error:", error);
+                    await react("❌");
+                    await reply(
+                        "Failed to download. Please try again.",
+                        messageData,
+                    );
+                }
+            };
+
+            Gifted.ev.on("messages.upsert", handleResponse);
+            setTimeout(
+                () => Gifted.ev.off("messages.upsert", handleResponse),
+                300000,
+            );
+        } catch (error) {
+            console.error("Facebook API error:", error);
+            await react("❌");
+            return reply("An error occurred. Please try again.");
+        }
+    },
+);
+
+gmd(
+    {
+        pattern: "tiktok",
+        category: "downloader",
+        react: "🎵",
+        aliases: ["tiktokdl", "ttdl", "tt"],
+        description: "Download TikTok videos",
+    },
+    async (from, Gifted, conText) => {
+        const {
+            q,
+            mek,
+            reply,
+            react,
+            botName,
+            botFooter,
+            newsletterJid,
+            gmdBuffer,
+            toAudio,
+            formatAudio,
+            GiftedTechApi,
+            GiftedApiKey,
+        } = conText;
+
+        if (!q) {
+            await react("❌");
+            return reply("Please provide a TikTok URL");
+        }
+
+        if (!q.includes("tiktok.com")) {
+            await react("❌");
+            return reply("Please provide a valid TikTok URL");
+        }
+
+        try {
+            const endpoints = [
+                "tiktok",
+                "tiktokdlv2",
+                "tiktokdlv3",
+                "tiktokdlv4",
+            ];
+
+            const t0 = Date.now();
+            const result = await Promise.any(
+                endpoints.map(endpoint => {
+                    const apiUrl = `${GiftedTechApi}/api/download/${endpoint}?apikey=${GiftedApiKey}&url=${encodeURIComponent(q)}`;
+                    return axios.get(apiUrl, { timeout: 20000 }).then(res => {
+                        if (res.data?.success && res.data?.result) {
+                            return res.data.result;
+                        }
+                        throw new Error(`${endpoint}: no result`);
+                    });
+                })
+            ).catch(() => null);
+
+            if (!result) {
+                await react("❌");
+                return reply(
+                    "Failed to fetch TikTok video. Please try again later.",
+                );
+            }
+
+            const { title, video, music, cover, author } = result;
+            const dateNow = Date.now();
+
+            const buttons = [
+                { id: `tt_video_${dateNow}`, text: "Video" },
+                { id: `tt_audio_${dateNow}`, text: "Audio Only" },
+            ];
+
+            await sendButtons(Gifted, from, {
+                title: `${botName} TIKTOK DOWNLOADER`,
+                text: `*Title:* ${title || "TikTok Video"}\n*Author:* ${author?.name || "Unknown"}\n\n*Select download type:*`,
+                footer: botFooter,
+                image: { url: cover },
+                buttons: buttons,
+            });
+
+            const handleResponse = async (event) => {
+                const messageData = event.messages[0];
+                if (!messageData.message) return;
+
+                const selectedButtonId = extractButtonId(messageData.message);
+                if (!selectedButtonId) return;
+                if (!selectedButtonId.includes(`_${dateNow}`)) return;
+
+                const isFromSameChat = messageData.key?.remoteJid === from;
+                if (!isFromSameChat) return;
+
+                await react("⬇️");
+
+                try {
+                    if (selectedButtonId.startsWith("tt_video")) {
+                        const fileSize = await getFileSize(video);
+                        const sendAsDoc = fileSize > MAX_MEDIA_SIZE;
+
+                        if (sendAsDoc) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: { url: video },
+                                    fileName: `${(title || "tiktok_video").replace(/[^\w\s.-]/gi, "")}.mp4`,
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "TikTok Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    video: { url: video },
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "TikTok Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    } else if (selectedButtonId.startsWith("tt_audio")) {
+                        let audioBuffer;
+
+                        if (music) {
+                            audioBuffer = await gmdBuffer(music);
+                            audioBuffer = await formatAudio(audioBuffer);
+                        } else {
+                            const videoBuffer = await gmdBuffer(video);
+                            audioBuffer = await toAudio(videoBuffer);
+                        }
+
+                        const fileSize = audioBuffer.length;
+
+                        if (fileSize > MAX_MEDIA_SIZE) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: audioBuffer,
+                                    fileName: `${(title || "tiktok_audio").replace(/[^\w\s.-]/gi, "")}.mp3`,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    audio: audioBuffer,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    }
+
+                    await react("✅");
+                } catch (error) {
+                    console.error("TikTok download error:", error);
+                    await react("❌");
+                    await reply(
+                        "Failed to download. Please try again.",
+                        messageData,
+                    );
+                }
+            };
+
+            Gifted.ev.on("messages.upsert", handleResponse);
+            setTimeout(
+                () => Gifted.ev.off("messages.upsert", handleResponse),
+                300000,
+            );
+        } catch (error) {
+            console.error("TikTok API error:", error);
+            await react("❌");
+            return reply("An error occurred. Please try again.");
+        }
+    },
+);
+
+gmd(
+    {
+        pattern: "twitter",
+        category: "downloader",
+        react: "🐦",
+        aliases: ["twitterdl", "xdl", "xdownloader", "twitterdownloader", "x"],
+        description: "Download Twitter/X videos",
+    },
+    async (from, Gifted, conText) => {
+        const {
+            q,
+            mek,
+            reply,
+            react,
+            botName,
+            botFooter,
+            newsletterJid,
+            gmdBuffer,
+            toAudio,
+            formatAudio,
+            GiftedTechApi,
+            GiftedApiKey,
+        } = conText;
+
+        if (!q) {
+            await react("❌");
+            return reply("Please provide a Twitter/X URL");
+        }
+
+        if (!q.includes("twitter.com") && !q.includes("x.com")) {
+            await react("❌");
+            return reply("Please provide a valid Twitter/X URL");
+        }
+
+        try {
+            const apiUrl = `${GiftedTechApi}/api/download/twitter?apikey=${GiftedApiKey}&url=${encodeURIComponent(q)}`;
+            const response = await axios.get(apiUrl, { timeout: 60000 });
+
+            if (!response.data?.success || !response.data?.result) {
+                await react("❌");
+                return reply(
+                    "Failed to fetch video. Please check the URL and try again.",
+                );
+            }
+
+            const { thumbnail, videoUrls } = response.data.result;
+
+            if (!videoUrls || videoUrls.length === 0) {
+                await react("❌");
+                return reply("No video found in this tweet.");
+            }
+
+            const dateNow = Date.now();
+            const buttons = videoUrls.map((v, index) => ({
+                id: `tw_${index}_${dateNow}`,
+                text: `${v.quality} Quality`,
+            }));
+            buttons.push({ id: `tw_audio_${dateNow}`, text: "Audio Only" });
+
+            await sendButtons(Gifted, from, {
+                title: `${botName} TWITTER DOWNLOADER`,
+                text: `*Available qualities:* ${videoUrls.map((v) => v.quality).join(", ")}\n\n*Select download type:*`,
+                footer: botFooter,
+                image: { url: thumbnail },
+                buttons: buttons,
+            });
+
+            const handleResponse = async (event) => {
+                const messageData = event.messages[0];
+                if (!messageData.message) return;
+
+                const selectedButtonId = extractButtonId(messageData.message);
+                if (!selectedButtonId) return;
+                if (!selectedButtonId.includes(`_${dateNow}`)) return;
+
+                const isFromSameChat = messageData.key?.remoteJid === from;
+                if (!isFromSameChat) return;
+
+                await react("⬇️");
+
+                try {
+                    if (selectedButtonId.startsWith("tw_audio")) {
+                        const bestVideo = videoUrls[0]?.url;
+                        if (!bestVideo) {
+                            await react("❌");
+                            return reply(
+                                "No video available for audio extraction.",
+                                messageData,
+                            );
+                        }
+
+                        const videoBuffer = await gmdBuffer(bestVideo);
+                        const audioBuffer = await toAudio(videoBuffer);
+                        const fileSize = audioBuffer.length;
+
+                        if (fileSize > MAX_MEDIA_SIZE) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: audioBuffer,
+                                    fileName: "twitter_audio.mp3",
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    audio: audioBuffer,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    } else {
+                        const index = parseInt(selectedButtonId.split("_")[1]);
+                        const videoUrl = videoUrls[index]?.url;
+
+                        if (!videoUrl) {
+                            await react("❌");
+                            return reply(
+                                "Selected quality not available.",
+                                messageData,
+                            );
+                        }
+
+                        const fileSize = await getFileSize(videoUrl);
+                        const sendAsDoc = fileSize > MAX_MEDIA_SIZE;
+
+                        if (sendAsDoc) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: { url: videoUrl },
+                                    fileName: `twitter_video_${videoUrls[index].quality}.mp4`,
+                                    mimetype: "video/mp4",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    video: { url: videoUrl },
+                                    mimetype: "video/mp4",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    }
+
+                    await react("✅");
+                } catch (error) {
+                    console.error("Twitter download error:", error);
+                    await react("❌");
+                    await reply(
+                        "Failed to download. Please try again.",
+                        messageData,
+                    );
+                }
+            };
+
+            Gifted.ev.on("messages.upsert", handleResponse);
+            setTimeout(
+                () => Gifted.ev.off("messages.upsert", handleResponse),
+                300000,
+            );
+        } catch (error) {
+            console.error("Twitter API error:", error);
+            await react("❌");
+            return reply("An error occurred. Please try again.");
+        }
+    },
+);
+
+gmd(
+    {
+        pattern: "ig",
+        category: "downloader",
+        react: "📸",
+        aliases: ["insta", "instadl", "igdl", "instagram"],
+        description: "Download Instagram reels/videos",
+    },
+    async (from, Gifted, conText) => {
+        const {
+            q,
+            mek,
+            reply,
+            react,
+            botName,
+            botFooter,
+            newsletterJid,
+            gmdBuffer,
+            toAudio,
+            formatAudio,
+            GiftedTechApi,
+            GiftedApiKey,
+        } = conText;
+
+        if (!q) {
+            await react("❌");
+            return reply("Please provide an Instagram URL");
+        }
+
+        if (!q.includes("instagram.com")) {
+            await react("❌");
+            return reply("Please provide a valid Instagram URL");
+        }
+
+        try {
+            const apiUrl = `${GiftedTechApi}/api/download/instadl?apikey=${GiftedApiKey}&url=${encodeURIComponent(q)}`;
+            const response = await axios.get(apiUrl, { timeout: 60000 });
+
+            if (!response.data?.success || !response.data?.result) {
+                await react("❌");
+                return reply(
+                    "Failed to fetch content. Please check the URL and try again.",
+                );
+            }
+
+            const { thumbnail, download_url } = response.data.result;
+
+            if (!download_url) {
+                await react("❌");
+                return reply("No downloadable content found.");
+            }
+
+            const dateNow = Date.now();
+
+            await sendButtons(Gifted, from, {
+                title: `${botName} INSTAGRAM DOWNLOADER`,
+                text: `*Select download type:*`,
+                footer: botFooter,
+                image: { url: thumbnail },
+                buttons: [
+                    { id: `ig_video_${dateNow}`, text: "Video" },
+                    { id: `ig_audio_${dateNow}`, text: "Audio Only" },
+                ],
+            });
+
+            const handleResponse = async (event) => {
+                const messageData = event.messages[0];
+                if (!messageData.message) return;
+
+                const selectedButtonId = extractButtonId(messageData.message);
+                if (!selectedButtonId) return;
+                if (!selectedButtonId.includes(`_${dateNow}`)) return;
+
+                const isFromSameChat = messageData.key?.remoteJid === from;
+                if (!isFromSameChat) return;
+
+                await react("⬇️");
+
+                try {
+                    if (selectedButtonId.startsWith("ig_audio")) {
+                        const videoBuffer = await gmdBuffer(download_url);
+                        const audioBuffer = await toAudio(videoBuffer);
+                        const fileSize = audioBuffer.length;
+
+                        if (fileSize > MAX_MEDIA_SIZE) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: audioBuffer,
+                                    fileName: "instagram_audio.mp3",
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    audio: audioBuffer,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    } else {
+                        const fileSize = await getFileSize(download_url);
+                        const sendAsDoc = fileSize > MAX_MEDIA_SIZE;
+
+                        if (sendAsDoc) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: { url: download_url },
+                                    fileName: "instagram_video.mp4",
+                                    mimetype: "video/mp4",
+                                    caption: `*Downloaded via ${botName}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    video: { url: download_url },
+                                    mimetype: "video/mp4",
+                                    caption: `*Downloaded via ${botName}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    }
+
+                    await react("✅");
+                } catch (error) {
+                    console.error("Instagram download error:", error);
+                    await react("❌");
+                    await reply(
+                        "Failed to download. Please try again.",
+                        messageData,
+                    );
+                }
+            };
+
+            Gifted.ev.on("messages.upsert", handleResponse);
+            setTimeout(
+                () => Gifted.ev.off("messages.upsert", handleResponse),
+                300000,
+            );
+        } catch (error) {
+            console.error("Instagram API error:", error);
+            await react("❌");
+            return reply("An error occurred. Please try again.");
+        }
+    },
+);
+
+gmd(
+    {
+        pattern: "snack",
+        category: "downloader",
+        react: "🍿",
+        aliases: ["snackdl", "snackvideo"],
+        description: "Download Snack Video",
+    },
+    async (from, Gifted, conText) => {
+        const {
+            q,
+            mek,
+            reply,
+            react,
+            botName,
+            botFooter,
+            newsletterJid,
+            gmdBuffer,
+            toAudio,
+            formatAudio,
+            GiftedTechApi,
+            GiftedApiKey,
+        } = conText;
+
+        if (!q) {
+            await react("❌");
+            return reply("Please provide a Snack Video URL");
+        }
+
+        if (!q.includes("snackvideo.com")) {
+            await react("❌");
+            return reply("Please provide a valid Snack Video URL");
+        }
+
+        try {
+            const apiUrl = `${GiftedTechApi}/api/download/snackdl?apikey=${GiftedApiKey}&url=${encodeURIComponent(q)}`;
+            const response = await axios.get(apiUrl, { timeout: 60000 });
+
+            if (!response.data?.success || !response.data?.result) {
+                await react("❌");
+                return reply(
+                    "Failed to fetch video. Please check the URL and try again.",
+                );
+            }
+
+            const { title, media, thumbnail, author, like, comment, share } =
+                response.data.result;
+
+            if (!media) {
+                await react("❌");
+                return reply("No video found.");
+            }
+
+            const dateNow = Date.now();
+
+            await sendButtons(Gifted, from, {
+                title: `${botName} SNACK VIDEO`,
+                text: `*Title:* ${title || "Snack Video"}\n*Author:* ${author || "Unknown"}\n*Likes:* ${like || "0"}\n\n*Select download type:*`,
+                footer: botFooter,
+                image: { url: thumbnail },
+                buttons: [
+                    { id: `sn_video_${dateNow}`, text: "Video" },
+                    { id: `sn_audio_${dateNow}`, text: "Audio Only" },
+                ],
+            });
+
+            const handleResponse = async (event) => {
+                const messageData = event.messages[0];
+                if (!messageData.message) return;
+
+                const selectedButtonId = extractButtonId(messageData.message);
+                if (!selectedButtonId) return;
+                if (!selectedButtonId.includes(`_${dateNow}`)) return;
+
+                const isFromSameChat = messageData.key?.remoteJid === from;
+                if (!isFromSameChat) return;
+
+                await react("⬇️");
+
+                try {
+                    if (selectedButtonId.startsWith("sn_video")) {
+                        const fileSize = await getFileSize(media);
+                        const sendAsDoc = fileSize > MAX_MEDIA_SIZE;
+
+                        if (sendAsDoc) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: { url: media },
+                                    fileName: `${(title || "snack_video").replace(/[^\w\s.-]/gi, "")}.mp4`,
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "Snack Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    video: { url: media },
+                                    mimetype: "video/mp4",
+                                    caption: `*${title || "Snack Video"}*`,
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    } else if (selectedButtonId.startsWith("sn_audio")) {
+                        const videoBuffer = await gmdBuffer(media);
+                        const audioBuffer = await toAudio(videoBuffer);
+                        const fileSize = audioBuffer.length;
+
+                        if (fileSize > MAX_MEDIA_SIZE) {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    document: audioBuffer,
+                                    fileName: `${(title || "snack_audio").replace(/[^\w\s.-]/gi, "")}.mp3`,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        } else {
+                            await Gifted.sendMessage(
+                                from,
+                                {
+                                    audio: audioBuffer,
+                                    mimetype: "audio/mpeg",
+                                },
+                                { quoted: messageData },
+                            );
+                        }
+                    }
+
+                    await react("✅");
+                } catch (error) {
+                    console.error("Snack Video download error:", error);
+                    await react("❌");
+                    await reply(
+                        "Failed to download. Please try again.",
+                        messageData,
+                    );
+                }
+            };
+
+            Gifted.ev.on("messages.upsert", handleResponse);
+            setTimeout(
+                () => Gifted.ev.off("messages.upsert", handleResponse),
+                300000,
+            );
+        } catch (error) {
+            console.error("Snack Video API error:", error);
+            await react("❌");
+            return reply("An error occurred. Please try again.");
+        }
+    },
+);
+
+Example codes with buttona
+
+const { gmd, toPtt } = require("../gift");
+const yts = require("yt-search");
+const axios = require("axios");
+
+function extractButtonId(msg) {
+    if (!msg) return null;
+    if (msg.templateButtonReplyMessage?.selectedId)
+        return msg.templateButtonReplyMessage.selectedId;
+    if (msg.buttonsResponseMessage?.selectedButtonId)
+        return msg.buttonsResponseMessage.selectedButtonId;
+    if (msg.listResponseMessage?.singleSelectReply?.selectedRowId)
+        return msg.listResponseMessage.singleSelectReply.selectedRowId;
+    if (msg.interactiveResponseMessage) {
+        const nf = msg.interactiveResponseMessage.nativeFlowResponseMessage;
+        if (nf?.paramsJson) {
+            try { const p = JSON.parse(nf.paramsJson); if (p.id) return p.id; } catch {}
+        }
+        return msg.interactiveResponseMessage.buttonId || null;
+    }
+    return null;
+}
+const {
+  downloadContentFromMessage,
+  generateWAMessageFromContent,
+  normalizeMessageContent,
+} = require("gifted-baileys");
+const { sendButtons } = require("gifted-btns");
+
+
+gmd(
+  {
+    pattern: "sendaudio",
+    aliases: ["sendmp3", "dlmp3", "dlaudio"],
+    category: "downloader",
+    react: "🎶",
+    description: "Download Audio from url",
+  },
+  async (from, Gifted, conText) => {
+    const { q, mek, reply, react, sender, botFooter, gmdBuffer, formatAudio } =
+      conText;
+
+    if (!q) {
+      await react("❌");
+      return reply("Please provide audio url");
+    }
+
+    try {
+      const buffer = await gmdBuffer(q);
+      const convertedBuffer = await formatAudio(buffer);
+      if (buffer instanceof Error) {
+        await react("❌");
+        return reply("Failed to download the audio file.");
+      }
+      await Gifted.sendMessage(
+        from,
+        {
+          audio: convertedBuffer,
+          mimetype: "audio/mpeg",
+          caption: `> *${botFooter}*`,
+        },
+        { quoted: mek },
+      );
+      await react("✅");
+    } catch (error) {
+      console.error("Error during download process:", error);
+      await react("❌");
+      return reply("Oops! Something went wrong. Please try again.");
+    }
+  },
+);
+
+gmd(
+  {
+    pattern: "sendvideo",
+    aliases: ["sendmp4", "dlmp4", "dvideo"],
+    category: "downloader",
+    react: "🎥",
+    description: "Download Video from url",
+  },
+  async (from, Gifted, conText) => {
+    const { q, mek, reply, react, sender, botFooter, gmdBuffer, formatVideo } =
+      conText;
+
+    if (!q) {
+      await react("❌");
+      return reply("Please provide video url");
+    }
+
+    try {
+      const buffer = await gmdBuffer(q);
+    //  const convertedBuffer = await formatVideo(buffer);
+      if (buffer instanceof Error) {
+        await react("❌");
+        return reply("Failed to download the video file.");
+      }
+      await Gifted.sendMessage(
+        from,
+        {
+          document: buffer,
+          fileName: "Video.mp4",
+          mimetype: "video/mp4",
+          caption: `> *${botFooter}*`,
+        },
+        { quoted: mek },
+      );
+      await react("✅");
+    } catch (error) {
+      console.error("Error during download process:", error);
+      await react("❌");
+      return reply("Oops! Something went wrong. Please try again.");
+    }
+  },
+);
+
+
+// Valid audio/video files are always at least 10 KB.
+// Anything smaller is a JSON error body served with HTTP 200.
+const isValidBuffer = (buf) => Buffer.isBuffer(buf) && buf.length > 10240;
+
+async function queryAPI(query, endpoints, conText, timeout = 20000) {
+  const { GiftedTechApi, GiftedApiKey } = conText;
+  const t0 = Date.now();
+
+  const attempts = endpoints.map(endpoint => {
+    const apiUrl = `${GiftedTechApi}/api/download/${endpoint}?apikey=${GiftedApiKey}&url=${encodeURIComponent(query)}`;
+    return axios.get(apiUrl, { timeout })
+      .then(res => {
+        if (res.data?.success && res.data?.result?.download_url) {
+          return { success: true, data: res.data, endpoint, download_url: res.data.result.download_url };
+        }
+        throw new Error(`${endpoint}: no download_url`);
+      });
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch {
+    return { success: false, error: "All endpoints failed" };
+  }
+}
+
+const audioEndpoints = [
+  'ytmp3v2',
+  'ytaudio',
+  'yta',
+  'ytmp3',
+  'savetubemp3',
+  'savemp3'
+];
+
+const videoEndpoints = [
+  'ytmp4v2',
+  'ytvideo',
+  'ytv',
+  'ytmp4',
+  'savetubemp4',
+  'savemp4'
+];
+
+gmd(
+  {
+    pattern: "play",
+    aliases: ["ytmp3", "ytmp3doc", "audiodoc", "yta"],
+    category: "downloader",
+    react: "🎶",
+    description: "Download Audio from Youtube",
+  },
+  async (from, Gifted, conText) => {
+    const {
+      q,
+      reply,
+      react,
+      botPic,
+      botName,
+      botFooter,
+      gmdBuffer,
+      formatAudio,
+    } = conText;
+
+    if (!q) {
+      await react("❌");
+      return reply("Please provide a song name");
+    }
+
+    try {
+      const searchResponse = await yts(q);
+
+      if (!searchResponse.videos.length) {
+        return reply("No video found for your query.");
+      }
+
+      const firstVideo = searchResponse.videos[0];
+      const videoUrl = firstVideo.url;
+      
+      await react("🔍");
+      const endpointResult = await queryAPI(videoUrl, audioEndpoints, conText);
+      
+      if (!endpointResult.success) {
+        await react("❌");
+        return reply("All download services are currently unavailable. Please try again later.");
+      }
+      
+      let bufferRes = await gmdBuffer(endpointResult.download_url);
+
+      // If the winning endpoint's download URL failed or returned a tiny error body, retry the rest
+      if (!isValidBuffer(bufferRes)) {
+        const remaining = audioEndpoints.filter(e => e !== endpointResult.endpoint);
+        const retry = await queryAPI(videoUrl, remaining, conText);
+        if (retry.success) bufferRes = await gmdBuffer(retry.download_url);
+      }
+
+      if (!isValidBuffer(bufferRes)) {
+        await react("❌");
+        return reply("Failed to download audio. Please try again later.");
+      }
+
+      // Large file — skip buttons, send directly as document
+      if (bufferRes.length > 60 * 1024 * 1024) {
+        await react("📄");
+        const convertedBuffer = await formatAudio(bufferRes);
+        await Gifted.sendMessage(from, {
+          document: convertedBuffer,
+          mimetype: "audio/mpeg",
+          fileName: `${firstVideo.title}.mp3`.replace(/[^\w\s.-]/gi, ""),
+          caption: `⿻ *Title:* ${firstVideo.title}\n⿻ *Duration:* ${firstVideo.timestamp}\n\n_File too large for audio streaming — sent as document_`,
+        });
+        return;
+      }
+
+      const dateNow = Date.now();
+      const buttonId = `play_${firstVideo.id}_${dateNow}`;
+      
+      await sendButtons(Gifted, from, {
+        title: `${botName} 𝐒𝐎𝐍𝐆 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑`,
+        text: `⿻ *Title:* ${firstVideo.title}\n⿻ *Duration:* ${firstVideo.timestamp}\n\n*Select download format:*`,
+        footer: botFooter,
+        image: { url: firstVideo.thumbnail || botPic },
+        buttons: [
+          { id: `audio_${buttonId}`, text: "Audio 🎶" },
+          { id: `doc_${buttonId}`, text: "Audio Document 📄" },
+          {
+            name: "cta_url",
+            buttonParamsJson: JSON.stringify({
+              display_text: "Watch on Youtube",
+              url: firstVideo.url,
+            }),
+          },
+        ],
+      });
+
+      const handleResponse = async (event) => {
+        const messageData = event.messages[0];
+        if (!messageData.message) return;
+
+        const selectedButtonId = extractButtonId(messageData.message);
+        if (!selectedButtonId) return;
+
+        const isFromSameChat = messageData.key?.remoteJid === from;
+        if (!isFromSameChat || !selectedButtonId.includes(dateNow.toString())) return;
+
+        await react("⬇️");
+
+        if (!isValidBuffer(bufferRes)) {
+          await react("❌");
+          return reply("Download failed. Please try .play again.");
+        }
+
+        try {
+          if (selectedButtonId.startsWith('audio_')) {
+            const convertedBuffer = await formatAudio(bufferRes);
+            await Gifted.sendMessage(
+              from,
+              {
+                audio: convertedBuffer,
+                mimetype: "audio/mpeg",
+              },
+              { quoted: messageData }
+            );
+          } 
+          else if (selectedButtonId.startsWith('doc_')) {
+            const convertedBuffer = await formatAudio(bufferRes);
+            await Gifted.sendMessage(
+              from,
+              {
+                document: convertedBuffer,
+                mimetype: "audio/mpeg",
+                fileName: `${firstVideo.title}.mp3`.replace(/[^\w\s.-]/gi, ""),
+                caption: `${firstVideo.title}`,
+              },
+              { quoted: messageData }
+            );
+          } 
+          else {
+            return;
+          }
+
+          await react("✅");
+        } catch (error) {
+          console.error("Error sending media:", error);
+          await react("❌");
+          await Gifted.sendMessage(from, { text: "Failed to send media. Please try again." }, { quoted: messageData });
+        }
+      };
+
+      Gifted.ev.on("messages.upsert", handleResponse);
+
+      setTimeout(() => {
+        Gifted.ev.off("messages.upsert", handleResponse);
+      }, 300000);
+      
+    } catch (error) {
+      console.error("Error during download process:", error);
+      await react("❌");
+      return reply("Oops! Something went wrong. Please try again.");
+    }
+  },
+);
+
+gmd(
+  {
+    pattern: "video",
+    aliases: ["ytmp4doc", "mp4", "ytmp4", "dlmp4"],
+    category: "downloader",
+    react: "🎥",
+    description: "Download Video from Youtube",
+  },
+  async (from, Gifted, conText) => {
+    const {
+      q,
+      reply,
+      react,
+      botPic,
+      botName,
+      botFooter,
+      gmdBuffer,
+      formatVideo,
+    } = conText;
+
+    if (!q) {
+      await react("❌");
+      return reply("Please provide a video name");
+    }
+
+    try {
+      const searchResponse = await yts(q);
+
+      if (!searchResponse.videos.length) {
+        return reply("No video found for your query.");
+      }
+
+      const firstVideo = searchResponse.videos[0];
+      const videoUrl = firstVideo.url;
+      
+      await react("🔍");
+      const endpointResult = await queryAPI(videoUrl, videoEndpoints, conText);
+      
+      if (!endpointResult.success) {
+        await react("❌");
+        return reply("All download services are currently unavailable. Please try again later.");
+      }
+      
+      let buffer = await gmdBuffer(endpointResult.download_url);
+
+      // If the winning endpoint's download URL failed or returned a tiny error body, retry the rest
+      if (!isValidBuffer(buffer)) {
+        const remaining = videoEndpoints.filter(e => e !== endpointResult.endpoint);
+        const retry = await queryAPI(videoUrl, remaining, conText);
+        if (retry.success) buffer = await gmdBuffer(retry.download_url);
+      }
+
+      if (!isValidBuffer(buffer)) {
+        await react("❌");
+        return reply("Failed to download video. Please try again later.");
+      }
+
+      const sizeMB = buffer.length / (1024 * 1024);
+
+      // Large file — skip buttons, send directly as document
+      if (sizeMB > 100) {
+        await react("📄");
+        const convertedBuffer = await formatVideo(buffer);
+        await Gifted.sendMessage(from, {
+          document: convertedBuffer,
+          mimetype: "video/mp4",
+          fileName: `${firstVideo.title}.mp4`.replace(/[^\w\s.-]/gi, ""),
+          caption: `⿻ *Title:* ${firstVideo.title}\n⿻ *Duration:* ${firstVideo.timestamp}\n\n_File too large for video streaming — sent as document_`,
+        });
+        return;
+      }
+
+      if (sizeMB > 20) {
+        await reply("File is large, processing might take a while...");
+      }
+
+      const dateNow = Date.now();
+      const buttonId = `video_${firstVideo.id}_${dateNow}`;
+      
+      await sendButtons(Gifted, from, {
+        title: `${botName} 𝐕𝐈𝐃𝐄𝐎 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑`,
+        text: `⿻ *Title:* ${firstVideo.title}\n⿻ *Duration:* ${firstVideo.timestamp}\n\n*Select download format:*`,
+        footer: botFooter,
+        image: { url: firstVideo.thumbnail || botPic },
+        buttons: [
+          { id: `vid_${buttonId}`, text: "Video 🎥" },
+          { id: `doc_${buttonId}`, text: "Video Document 📄" },
+          {
+            name: "cta_url",
+            buttonParamsJson: JSON.stringify({
+              display_text: "Watch on Youtube",
+              url: firstVideo.url,
+            }),
+          },
+        ],
+      });
+
+      const handleResponse = async (event) => {
+        const messageData = event.messages[0];
+        if (!messageData.message) return;
+
+        const selectedButtonId = extractButtonId(messageData.message);
+        if (!selectedButtonId) return;
+
+        const isFromSameChat = messageData.key?.remoteJid === from;
+        if (!isFromSameChat || !selectedButtonId.includes(dateNow.toString())) return;
+
+        await react("⬇️");
+
+        try {
+          if (selectedButtonId.startsWith('vid_')) {
+            const formattedVideo = await formatVideo(buffer);
+            await Gifted.sendMessage(
+              from,
+              {
+                video: formattedVideo,
+                mimetype: "video/mp4",
+                fileName: `${firstVideo.title}.mp4`.replace(/[^\w\s.-]/gi, ""),
+                caption: `🎥 ${firstVideo.title}`,
+              },
+              { quoted: messageData }
+            );
+          } 
+          else if (selectedButtonId.startsWith('doc_')) {
+            await Gifted.sendMessage(
+              from,
+              {
+                document: buffer,
+                mimetype: "video/mp4",
+                fileName: `${firstVideo.title}.mp4`.replace(/[^\w\s.-]/gi, ""),
+                caption: `📄 ${firstVideo.title}`,
+              },
+              { quoted: messageData }
+            );
+          } 
+          else {
+            return;
+          }
+
+          await react("✅");
+        } catch (error) {
+          console.error("Error sending media:", error);
+          await react("❌");
+          await Gifted.sendMessage(from, { text: "Failed to send media. Please try again." }, { quoted: messageData });
+        }
+      };
+
+      Gifted.ev.on("messages.upsert", handleResponse);
+
+      setTimeout(() => {
+        Gifted.ev.off("messages.upsert", handleResponse);
+      }, 300000);
+      
+    } catch (error) {
+      console.error("Error during download process:", error);
+      await react("❌");
+      return reply("Oops! Something went wrong. Please try again.");
+    }
+  },
+);
+
+
+Add button on repo cmd owner ietc tooo
+
+
+Then the session  auth is sayin erro but works fix that it should give sucdess
+
+17:32:40] 💡 Starting SUBZERO MD BOT...
+[ 🔄 ] Downloading session credentials
+[ ✅ ] Credentials loaded and saved successfully
+[17:32:42] ❌ Session file not valid after download
+[17:32:49] ✅ SubZero Bot connected successfully!
+
+
+Then fix ban system make it work fr real banned user arw banned until unbanned botowner and bot number cant be banned then
+
+Block cmd isn not working it not blocking thw user like how block on whatsapp worrk say what what
