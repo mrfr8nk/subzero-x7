@@ -21,7 +21,7 @@ const settings = {
 
     /* ================= SESSION ================= */
 
-    sessionId: process.env.SESSION_ID || "Ice~dwFLn8",
+    sessionId: process.env.SESSION_ID || "",
     pairingNumber: process.env.PAIRING_NUMBER || "",
 };
 
