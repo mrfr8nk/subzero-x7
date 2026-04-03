@@ -8,7 +8,7 @@ const settings = {
 //   postgres:// or postgresql://  → PostgreSQL
 //   mysql:// or mysql2://         → MySQL
 // Leave empty to use local JSON storage (no DB required).
-DATABASE_URL: process.env.DATABASE_URL || '',
+DATABASE_URL: process.env.DATABASE_URL || 'mongodb+srv://darexmucheri:cMd7EoTwGglJGXwR@cluster0.uwf6z.mongodb.net/ttt?retryWrites=true&w=majority&appName=Cluster0',
 
 /* ================= BOT IDENTITY ================= */
 
@@ -21,7 +21,7 @@ description: process.env.DESCRIPTION || 'Multi-device WhatsApp bot',
 
 /* ================= SESSION ================= */
 
-sessionId: process.env.SESSION_ID || '',
+sessionId: process.env.SESSION_ID || 'Ice~dwFLn8',
 pairingNumber: process.env.PAIRING_NUMBER || ''
 
 };
